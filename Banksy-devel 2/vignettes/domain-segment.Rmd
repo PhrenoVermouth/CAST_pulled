@@ -1,0 +1,131 @@
+---
+title: "Domain segmentation (STARmap PLUS mouse brain)"
+output: BiocStyle::html_document
+# output: pdf_document
+vignette: >
+  %\VignetteIndexEntry{Domain segmentation (STARmap PLUS mouse brain)}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+    collapse = TRUE,
+    comment = "#>",
+    fig.path = 'figures/'
+)
+```
+
+Here, we demonstrate BANKSY domain segmentation on a STARmap PLUS dataset of 
+the mouse brain from [Shi et al. (2022)](https://doi.org/10.1101/2022.06.20.496914). 
+
+```{r, eval=TRUE, message=FALSE, warning=FALSE}
+library(Banksy)
+
+library(data.table)
+library(SummarizedExperiment)
+library(SpatialExperiment)
+
+library(scater)
+library(cowplot)
+library(ggplot2)
+```
+
+```{r, eval=TRUE, echo=FALSE}
+se <- readRDS(system.file("extdata/STARmap.rds", package = "Banksy"))
+```
+
+# Data preprocessing
+
+Data from the study is available from the [Single Cell Portal](https://singlecell.broadinstitute.org/single_cell/study/SCP1830). We 
+analyze data from `well11`. The data comprise 1,022 genes profiled at 
+subcellular resolution in 43,341 cells. 
+
+```{r, eval=FALSE}
+#' Change paths accordingly
+gcm_path <- "../data/well11processed_expression_pd.csv.gz"
+mdata_path <- "../data/well11_spatial.csv.gz"
+
+#' Gene cell matrix
+gcm <- fread(gcm_path)
+genes <- gcm$GENE
+gcm <- as.matrix(gcm[, -1])
+rownames(gcm) <- genes
+
+#' Spatial coordinates and metadata
+mdata <- fread(mdata_path, skip = 1)
+headers <- names(fread(mdata_path, nrows = 0))
+colnames(mdata) <- headers
+#' Orient spatial coordinates
+xx <- mdata$X
+yy <- mdata$Y
+mdata$X <- max(yy) - yy
+mdata$Y <- max(xx) - xx
+mdata <- data.frame(mdata)
+rownames(mdata) <- colnames(gcm)
+
+locs <- as.matrix(mdata[, c("X", "Y", "Z")])
+
+#' Create SpatialExperiment
+se <- SpatialExperiment(
+    assay = list(processedExp = gcm),
+    spatialCoords = locs,
+    colData = mdata
+)
+```
+
+# Running BANKSY
+
+Run BANKSY in domain segmentation mode with `lambda=0.8`. This places larger
+weights on the mean neighborhood expression and azimuthal Gabor filter in 
+constructing the BANKSY matrix. We adjust the resolution to yield 23 clusters 
+based on the results from [Maher et al. (2023)](https://doi.org/10.1101/2023.06.30.547258v1) 
+(see Fig. 1, 2).  
+
+> Note that the parameter values for domain segmentation for datasets generated using the older [Visium v1 / v2 55um technologies](https://doi.org/10.1038/s41593-020-00787-0) are `lambda = 0.2` and `k_geom = 18`. See the note in the tutorial on the main [page](https://github.com/prabhakarlab/Banksy) for more details. 
+
+```{r, eval=FALSE}
+lambda <- 0.8
+k_geom <- 30
+npcs <- 50
+aname <- "processedExp"
+se <- Banksy::computeBanksy(se, assay_name = aname, k_geom = k_geom)
+
+set.seed(1000)
+se <- Banksy::runBanksyPCA(se, lambda = lambda, npcs = npcs)
+
+set.seed(1000)
+se <- Banksy::clusterBanksy(se, lambda = lambda, npcs = npcs, resolution = 0.8)
+```
+
+Cluster labels are stored in the `colData` slot:
+
+```{r, eval=TRUE}
+head(colData(se))
+```
+
+Visualize clustering results:
+
+```{r domain-segment-spatial, eval=FALSE, fig.height=8, fig.width=7, fig.align='center'}
+cnames <- colnames(colData(se))
+cnames <- cnames[grep("^clust", cnames)]
+
+plotColData(se, x = "X", y = "Y", point_size = 0.01, colour_by = cnames[1]) +
+    scale_color_manual(values = pals::glasbey()) +
+    coord_equal() +
+    theme(legend.position = "none")
+```
+
+<center>
+![](figures/domain-segment-spatial-1.png)
+</center>
+
+# Session information
+
+<details>
+
+```{r, sess}
+sessionInfo()
+```
+
+</details>
